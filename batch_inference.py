@@ -1,11 +1,17 @@
+"""
+References:
+https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/batch_llm_inference.py
+https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/prefix_caching.py
+https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
+"""
 import argparse
 import json
 import logging
-import os
 
 import pandas as pd
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
+from vllm.sampling_params import StructuredOutputsParams
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -19,6 +25,7 @@ if __name__ == "__main__":
     parser.add_argument("--data-path", type=str, required=True, help="Path to the parquet dataset")
     parser.add_argument("--prompt-path", type=str, required=True, help="Path to the text file containing the system prompt")
     parser.add_argument("--output-path", type=str, required=True, help="Directory to save the results")
+    parser.add_argument("--json-struct-path", type=str, default=None, help="Path to the JSON file describing the desired structured output")
     parser.add_argument("--model-name", type=str, default="Qwen3-14B")
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
@@ -78,8 +85,16 @@ if __name__ == "__main__":
     # ]
     prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
 
-    # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
+    # Create sampling parameter object
     sampling_params = SamplingParams(temperature=args.temperature)
+    if args.json_struct_path is not None:
+        # Ensure sturctured JSON output
+        with open(args.json_struct_path, "r") as f:
+            json_schema = json.load(f)
+        structured_outputs_params_json = StructuredOutputsParams(json=json_schema)
+        sampling_params.structured_outputs = structured_outputs_params_json
+
+    # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
     llm.generate(prompts[0], sampling_params)
 
     # Process the prompts in batches
