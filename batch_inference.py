@@ -1,6 +1,8 @@
 """
-References:
-https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/batch_llm_inference.py
+Centralized inference pipeline using vLLM.
+
+References
+----------
 https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/prefix_caching.py
 https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
 """
@@ -42,6 +44,13 @@ if __name__ == "__main__":
     df = pd.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
     with open(args.prompt_path, "r", encoding="utf-8") as file:
         system_instr = file.read()
+
+    # Load structured output schema if provided
+    json_schema = None
+    if args.json_struct_path is not None:
+        with open(args.json_struct_path, "r") as f:
+            json_schema = json.load(f)
+        logger.info("Structured JSON output enabled")
 
     # Validate metadata on resume
     metadata_path = f"{args.output_path}/metadata.json"
@@ -87,10 +96,8 @@ if __name__ == "__main__":
 
     # Create sampling parameter object
     sampling_params = SamplingParams(temperature=args.temperature)
-    if args.json_struct_path is not None:
+    if json_schema is not None:
         # Ensure sturctured JSON output
-        with open(args.json_struct_path, "r") as f:
-            json_schema = json.load(f)
         structured_outputs_params_json = StructuredOutputsParams(json=json_schema)
         sampling_params.structured_outputs = structured_outputs_params_json
 
