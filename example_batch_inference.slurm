@@ -10,7 +10,7 @@
 #SBATCH --output=/cluster/home/%u/logs/%j.out
 #SBATCH --error=/cluster/home/%u/logs/%j.err
 
-mkdir -p /cluster/home/%u/logs
+mkdir -p /cluster/home/$USER/logs
 
 # Load Apptainer module
 module load apptainer
