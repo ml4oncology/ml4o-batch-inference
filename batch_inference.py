@@ -20,7 +20,9 @@ if __name__ == "__main__":
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
-    parser.add_argument("--max-model-len", type=int, default=2048, help="Max number of tokens for prompt + output")
+    parser.add_argument("--max-model-len", "--max-tokens", type=int, default=2048, help="Max number of tokens for prompt + output")
+    parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=256, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
+    parser.add_argument("--gpu-memory-utilization", default=0.95)
     parser.add_argument("--temperature", type=int, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
     args = parser.parse_args()
 
@@ -37,7 +39,17 @@ if __name__ == "__main__":
     llm = LLM(
         model=f"{ROOT_DIR}/LLMs/{args.model_name}",
         tensor_parallel_size=args.tensor_parallel_size,
+        max_num_seqs=args.max_num_seqs,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+
+        # pre-allocates KV cache memory based on max-model-len, regardless of actual
+        # prompt length. A large max-model-len will eat up a large chunk of GPU memory,
+        # leaving little memory for the actual inputs/outputs
         max_model_len=args.max_model_len,
+
+        # allocates a much larger KV cache memory, can be used dynamically for input
+        # tokens and output tokens and cached prefix blocks. Do not worry if most of the
+        # GPU RAM is taken, it already includes the memory for inputs/outputs
         enable_prefix_caching=True,
     )
 
@@ -51,7 +63,7 @@ if __name__ == "__main__":
     ]
 
     # Process the prompts
-    outputs = llm.generate(prompts, sampling_params)
+    outputs = llm.chat(prompts, sampling_params)
 
     # Save results
     res = [output.outputs[0].text for output in outputs]
