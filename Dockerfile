@@ -40,7 +40,7 @@ WORKDIR /ml4o-batch-inf
 COPY . /ml4o-batch-inf
 
 # Install project dependencies
-RUN uv pip install --system -e .[dev] --prerelease=allow
+RUN uv pip install --system -e .[inference] --prerelease=allow
 
 # Install NCCL for multi-GPU support
 RUN apt-get update && apt-get install -y --allow-change-held-packages\
