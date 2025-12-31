@@ -76,17 +76,21 @@ if __name__ == "__main__":
     #      {"role": "user", "content": text}]
     #      for text in df[args.text_col]
     # ]
-    prompts = [f"{system_instr}/n{text}" for text in df[args.text_col]]
+    prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
+
+    # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
+    sampling_params = SamplingParams(temperature=args.temperature)
+    llm.generate(prompts[0], sampling_params)
 
     # Process the prompts in batches
     batch_size = args.max_num_seqs * args.checkpoint_interval
-    sampling_params = SamplingParams(temperature=args.temperature)
     for batch_num, i in enumerate(tqdm(range(0, len(prompts), batch_size))):
         batch = prompts[i:i+batch_size]
+        ids = df[args.id_col].iloc[i:i+batch_size]
         # outputs = llm.chat(batch, sampling_params)
         outputs = llm.generate(batch, sampling_params)
         res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
 
         # save results
-        res = pd.DataFrame(res, index=df[args.id_col])
+        res = pd.DataFrame(res, index=ids)
         res.to_parquet(f"{args.output_path}/batch_{batch_num}.parquet", compression="zstd")
