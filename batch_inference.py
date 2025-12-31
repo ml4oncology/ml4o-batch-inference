@@ -34,7 +34,7 @@ if __name__ == "__main__":
     if args.output_path is None:
         args.output_path = args.data_path.replace(".parquet", "_output.parquet")
         logger.info(f"No output path specified, using: {args.output_path}")
-    checkpoint_path = args.output_path.replace(".parquet", "_checkpoint.parquet")
+    checkpoint_path = args.output_path.replace(".parquet", "_checkpoint.pkl")
 
     # Load dataset and system instruction
     df = pd.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
@@ -69,7 +69,7 @@ if __name__ == "__main__":
 
     # Resume from checkpoint if exists
     if os.path.exists(checkpoint_path) and args.resume_from_checkpoint:
-        with open(checkpoint_path, 'rb') as file:
+        with open(checkpoint_path, "rb") as file:
             res = pickle.load(file)
         prompts = prompts[len(res):]
     else:
@@ -84,9 +84,13 @@ if __name__ == "__main__":
         res += [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
         # save checkpoints at every Nth batch
         if batch_num % args.checkpoint_interval == 0:
+            # TODO: add metadata to checkpoint, validate metadata matches when resuming from checkpoint
             with open(checkpoint_path, "wb") as file:
                 pickle.dump(res, file)
 
     # Save results
     res = pd.DataFrame(res, index=df[args.id_col])
     res.to_parquet(args.output_path, compression="zstd")
+
+    # Clean up
+    os.remove(checkpoint_path)
