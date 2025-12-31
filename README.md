@@ -45,35 +45,10 @@ Alternatively, you can set up Apptainer locally, convert the files locally, and 
 Run batch inference using the Apptainer container:
 
 ```bash
-apptainer exec --nv ml4o-batch-inf-image.sif python batch_inference.py \
-    --model-path /path/to/model \
-    --input-path /path/to/input \
-    --output-path /path/to/output \
-    --batch-size 32
-```
-
-## Configuration
-
-### Performance Tuning
-
-Key parameters for optimization:
-
-- `--batch-size`: Number of requests to process in parallel (default: 32)
-- `--max-tokens`: Maximum tokens to generate per request (default: 512)
-- `--tensor-parallel-size`: Number of GPUs for tensor parallelism (default: 1)
-- `--gpu-memory-utilization`: Fraction of GPU memory to use (default: 0.9)
-
-Example with performance tuning:
-
-```bash
-python batch_inference.py \
-    --model-path /path/to/model \
-    --input-file input.jsonl \
-    --output-file output.jsonl \
-    --batch-size 64 \
-    --max-tokens 256 \
-    --tensor-parallel-size 2 \
-    --gpu-memory-utilization 0.95
+apptainer exec --nv ml4o-batch-inf-image.sif python3.10 batch_inference.py \
+    --data-path /path/to/data.parquet \
+    --output-path /path/to/output.parquet \
+    --prompt-path /path/to/prompt.txt \
 ```
 
 ## Project Structure
