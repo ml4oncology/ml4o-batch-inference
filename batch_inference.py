@@ -1,19 +1,43 @@
+"""
+Centralized inference pipeline using vLLM.
+
+References
+----------
+https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/prefix_caching.py
+https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
+"""
 import argparse
+import json
+import logging
 
 import pandas as pd
+from tqdm import tqdm
 from vllm import LLM, SamplingParams
+from vllm.sampling_params import StructuredOutputsParams
+
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 ROOT_DIR = "/cluster/projects/gliugroup/2BLAST"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type=str, required=True, help="Path to the dataset in parquet format")
-    parser.add_argument("--output-path", type=str, help="Where to save the results")
+    parser.add_argument("--data-path", type=str, required=True, help="Path to the parquet dataset")
     parser.add_argument("--prompt-path", type=str, required=True, help="Path to the text file containing the system prompt")
-    parser.add_argument("--text-col", type=str, default="note", help="Name of the column containing the text")
-    parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column containing the text identifier")
+    parser.add_argument("--output-path", type=str, required=True, help="Directory to save the results")
+    parser.add_argument("--json-struct-path", type=str, default=None, help="Path to the JSON file describing the desired structured output")
     parser.add_argument("--model-name", type=str, default="Qwen3-14B")
+    parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
+    parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
+    parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
+    parser.add_argument("--max-model-len", "--max-tokens", type=int, default=2048, help="Max number of tokens for prompt + output")
+    parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=256, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.95, help="Fraction of GPU memory to use")
+    parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
+    parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N batches")
+    parser.add_argument("--resume-from-checkpoint", action="store_true", help="Resume from existing output directory if it exists")
     args = parser.parse_args()
 
     # Load dataset and system instruction
@@ -21,23 +45,74 @@ if __name__ == "__main__":
     with open(args.prompt_path, "r", encoding="utf-8") as file:
         system_instr = file.read()
 
-    # Initialize with 2 GPUs
+    # Load structured output schema if provided
+    json_schema = None
+    if args.json_struct_path is not None:
+        with open(args.json_struct_path, "r") as f:
+            json_schema = json.load(f)
+        logger.info("Structured JSON output enabled")
+
+    # Validate metadata on resume
+    metadata_path = f"{args.output_path}/metadata.json"
+    current_metadata = vars(args)
+    if args.resume_from_checkpoint:
+        with open(metadata_path, "r") as f:
+            saved_metadata = json.load(f)
+        # Compare saved metadata with current args
+        assert saved_metadata == current_metadata, (
+            f"Cannot resume: metadata mismatch detected.\n"
+            f"Saved: {saved_metadata}\n"
+            f"Current: {current_metadata}"
+        )
+    else:
+        with open(metadata_path, "w") as f:
+            json.dump(current_metadata, f, indent=2)
+
+    # Initialize vLLM
     llm = LLM(
         model=f"{ROOT_DIR}/LLMs/{args.model_name}",
-        tensor_parallel_size=2,
-        max_model_len=2048,
-        enable_prefix_caching=True
+        tensor_parallel_size=args.tensor_parallel_size,
+        max_num_seqs=args.max_num_seqs,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+
+        # pre-allocates KV cache memory based on max-model-len, regardless of actual
+        # prompt length. A large max-model-len will eat up a large chunk of GPU memory,
+        # leaving little memory for the actual inputs/outputs
+        max_model_len=args.max_model_len,
+
+        # allocates a much larger KV cache memory, can be used dynamically for input
+        # tokens and output tokens and cached prefix blocks. Do not worry if most of the
+        # GPU RAM is taken, it already includes the memory for inputs/outputs
+        enable_prefix_caching=True,
     )
 
-    sampling_params = SamplingParams(temperature=0.7, max_tokens=512)
-
     # Create the prompts
-    prompts = [(system_instr + df[args.text_col]).tolist()]
+    # prompts = [
+    #     [{"role": "system", "content": system_instr},
+    #      {"role": "user", "content": text}]
+    #      for text in df[args.text_col]
+    # ]
+    prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
 
-    # Process the prompts
-    outputs = llm.generate(prompts, sampling_params)
+    # Create sampling parameter object
+    sampling_params = SamplingParams(temperature=args.temperature)
+    if json_schema is not None:
+        # Ensure sturctured JSON output
+        structured_outputs_params_json = StructuredOutputsParams(json=json_schema)
+        sampling_params.structured_outputs = structured_outputs_params_json
 
-    # Save results
-    res = [output.outputs[0].text for output in outputs]
-    df["generated_output"] = res
-    df.to_parquet(args.output_path, compression="zstd", index=False)
+    # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
+    llm.generate(prompts[0], sampling_params)
+
+    # Process the prompts in batches
+    batch_size = args.max_num_seqs * args.checkpoint_interval
+    for batch_num, i in enumerate(tqdm(range(0, len(prompts), batch_size))):
+        batch = prompts[i:i+batch_size]
+        ids = df[args.id_col].iloc[i:i+batch_size]
+        # outputs = llm.chat(batch, sampling_params)
+        outputs = llm.generate(batch, sampling_params)
+        res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
+
+        # save results
+        res = pd.DataFrame(res, index=ids)
+        res.to_parquet(f"{args.output_path}/batch_{batch_num}.parquet", compression="zstd")
