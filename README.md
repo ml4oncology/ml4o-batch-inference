@@ -37,7 +37,10 @@ apptainer build ml4o-batch-inf-image.sif docker-archive://ml4o-batch-inf-image.t
 ```
 
 Alternatively, you can set up Apptainer locally, convert the files locally, and upload the `.sif` file to the H4H cluster.
-
+```bash
+docker build --progress=plain -t ml4o-batch-inf-image .
+apptainer build ml4o-batch-inf-image.sif docker-daemon://ml4o-batch-inf-image
+```
 ## Usage
 
 ### Basic Batch Inference
