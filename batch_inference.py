@@ -32,8 +32,8 @@ if __name__ == "__main__":
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
-    parser.add_argument("--max-model-len", "--max-tokens", type=int, default=2048, help="Max number of tokens for prompt + output")
-    parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=256, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
+    parser.add_argument("--max-model-len", "--max-tokens", type=int, default=4096, help="Max number of tokens for prompt + output")
+    parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=16, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.95, help="Fraction of GPU memory to use")
     parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
     parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N batches")
@@ -102,6 +102,7 @@ if __name__ == "__main__":
         sampling_params.structured_outputs = structured_outputs_params_json
 
     # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
+    # llm.chat(prompts[0], sampling_params)
     llm.generate(prompts[0], sampling_params)
 
     # Process the prompts in batches
@@ -109,7 +110,6 @@ if __name__ == "__main__":
     for batch_num, i in enumerate(tqdm(range(0, len(prompts), batch_size))):
         batch = prompts[i:i+batch_size]
         ids = df[args.id_col].iloc[i:i+batch_size]
-        # outputs = llm.chat(batch, sampling_params)
         outputs = llm.generate(batch, sampling_params)
         res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
 
