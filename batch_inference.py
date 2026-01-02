@@ -9,9 +9,11 @@ https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/struct
 import argparse
 import json
 import logging
+import os
 
 import pandas as pd
 from tqdm import tqdm
+from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import StructuredOutputsParams
 
@@ -27,18 +29,25 @@ if __name__ == "__main__":
     parser.add_argument("--data-path", type=str, required=True, help="Path to the parquet dataset")
     parser.add_argument("--prompt-path", type=str, required=True, help="Path to the text file containing the system prompt")
     parser.add_argument("--output-path", type=str, required=True, help="Directory to save the results")
+    parser.add_argument("--tokenizer-path", type=str, default=None, help="Path to the tokenizer")
     parser.add_argument("--json-struct-path", type=str, default=None, help="Path to the JSON file describing the desired structured output")
     parser.add_argument("--model-name", type=str, default="Qwen3-14B")
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
     parser.add_argument("--max-model-len", "--max-tokens", type=int, default=4096, help="Max number of tokens for prompt + output")
+    parser.add_argument("--min-output-len", type=int, default=500, help="Minimum number of tokens for output")
     parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=16, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.95, help="Fraction of GPU memory to use")
     parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
     parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N batches")
     parser.add_argument("--resume-from-checkpoint", action="store_true", help="Resume from existing output directory if it exists")
     args = parser.parse_args()
+
+    os.makedirs(f"{args.output_path}/generated_output", exist_ok=True)
+    model_path = f"{ROOT_DIR}/LLMs/{args.model_name}"
+    if args.tokenizer_path is None:
+        args.tokenizer_path = model_path
 
     # Load dataset and system instruction
     df = pd.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
@@ -68,9 +77,22 @@ if __name__ == "__main__":
         with open(metadata_path, "w") as f:
             json.dump(current_metadata, f, indent=2)
 
+    # Ignore prompts that's too long (exceeds max-model-len minus min-output-len)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    system_instr_token_length = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
+    token_lengths, bs = [], int(1e6)
+    for i in range(0, len(df), bs):
+        token_lengths += tokenizer(df[args.text_col].iloc[i:i+bs].tolist(), add_special_tokens=False, return_length=True)["length"]
+    df["token_length"] = token_lengths
+    mask = system_instr_token_length + df["token_length"] > args.max_model_len - args.min_output_len
+    if mask.any():
+        df, df_ignored = df[~mask], df[mask]
+        logger.info(f"Ignoring {mask.sum()} ({mask.mean()*100:.3f}%) samples that exceed {args.max_model_len-args.min_output_len} tokens")
+        df_ignored.to_parquet(f"{args.output_path}/unprocessed.parquet", index=False, compression="gzip")
+
     # Initialize vLLM
     llm = LLM(
-        model=f"{ROOT_DIR}/LLMs/{args.model_name}",
+        model=model_path,
         tensor_parallel_size=args.tensor_parallel_size,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=args.gpu_memory_utilization,
@@ -108,11 +130,17 @@ if __name__ == "__main__":
     # Process the prompts in batches
     batch_size = args.max_num_seqs * args.checkpoint_interval
     for batch_num, i in enumerate(tqdm(range(0, len(prompts), batch_size))):
+        # Check if already processed
+        batch_filepath = f"{args.output_path}/generated_output/batch_{batch_num}.parquet"
+        if args.resume_from_checkpoint and os.path.exists(batch_filepath):
+            continue
+
+        # Process them
         batch = prompts[i:i+batch_size]
         ids = df[args.id_col].iloc[i:i+batch_size]
         outputs = llm.generate(batch, sampling_params)
         res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
 
-        # save results
+        # Save results
         res = pd.DataFrame(res, index=ids)
-        res.to_parquet(f"{args.output_path}/batch_{batch_num}.parquet", compression="zstd")
+        res.to_parquet(batch_filepath, compression="zstd")
