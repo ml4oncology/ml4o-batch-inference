@@ -7,6 +7,7 @@ https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/prefix
 https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/structured_outputs.py
 """
 import argparse
+import gc
 import json
 import logging
 import os
@@ -80,7 +81,7 @@ if __name__ == "__main__":
     # Ignore prompts that's too long (exceeds max-model-len minus min-output-len)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
     system_instr_token_length = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
-    token_lengths, bs = [], int(1e6)
+    token_lengths, bs = [], int(1e5)
     for i in range(0, len(df), bs):
         token_lengths += tokenizer(df[args.text_col].iloc[i:i+bs].tolist(), add_special_tokens=False, return_length=True)["length"]
     df["token_length"] = token_lengths
@@ -89,6 +90,9 @@ if __name__ == "__main__":
         df, df_ignored = df[~mask], df[mask]
         logger.info(f"Ignoring {mask.sum()} ({mask.mean()*100:.3f}%) samples that exceed {args.max_model_len-args.min_output_len} tokens")
         df_ignored.to_parquet(f"{args.output_path}/unprocessed.parquet", index=False, compression="gzip")
+    # Tokenizer uses a lot of memory, free it up
+    del tokenizer
+    gc.collect()
 
     # Initialize vLLM
     llm = LLM(
