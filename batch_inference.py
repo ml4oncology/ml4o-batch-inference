@@ -113,12 +113,13 @@ if __name__ == "__main__":
     )
 
     # Create the prompts
-    # prompts = [
-    #     [{"role": "system", "content": system_instr},
-    #      {"role": "user", "content": text}]
-    #      for text in df[args.text_col]
-    # ]
-    prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
+    # NOTE: if you don't apply chat template, you won't get a structured thinking
+    prompts = [
+        [{"role": "system", "content": system_instr},
+         {"role": "user", "content": text}]
+         for text in df[args.text_col]
+    ]
+    # prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
 
     # Create sampling parameter object
     sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_output_len)
@@ -128,8 +129,8 @@ if __name__ == "__main__":
         sampling_params.structured_outputs = structured_outputs_params_json
 
     # Warmup so that the shared prompt's KV cache is computed (for prefix caching)
-    # llm.chat(prompts[0], sampling_params)
-    llm.generate(prompts[0], sampling_params)
+    llm.chat(prompts[0], sampling_params)
+    # llm.generate(prompts[0], sampling_params)
 
     # Process the prompts in batches
     batch_size = args.max_num_seqs * args.checkpoint_interval
@@ -142,7 +143,7 @@ if __name__ == "__main__":
         # Process them
         batch = prompts[i:i+batch_size]
         ids = df[args.id_col].iloc[i:i+batch_size]
-        outputs = llm.generate(batch, sampling_params)
+        outputs = llm.chat(batch, sampling_params)
         res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
 
         # Save results
