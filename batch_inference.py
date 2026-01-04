@@ -41,6 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=16, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.95, help="Fraction of GPU memory to use")
     parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
+    parser.add_argument("--enable-thinking", action="store_true", help="Whether to enable thinking (may use up a lot of output tokens)")
     parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N batches")
     parser.add_argument("--resume-from-checkpoint", action="store_true", help="Resume from existing output directory if it exists")
     args = parser.parse_args()
@@ -97,6 +98,7 @@ if __name__ == "__main__":
     # Initialize vLLM
     llm = LLM(
         model=model_path,
+        tokenizer=args.tokenizer_path,
         tensor_parallel_size=args.tensor_parallel_size,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=args.gpu_memory_utilization,
@@ -143,7 +145,7 @@ if __name__ == "__main__":
         # Process them
         batch = prompts[i:i+batch_size]
         ids = df[args.id_col].iloc[i:i+batch_size]
-        outputs = llm.chat(batch, sampling_params)
+        outputs = llm.chat(batch, sampling_params, chat_template_kwargs={"enable_thinking": args.enable_thinking})
         res = [{"prompt": output.prompt, "generated_output": output.outputs[0].text} for output in outputs]
 
         # Save results
