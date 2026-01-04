@@ -36,8 +36,8 @@ if __name__ == "__main__":
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
-    parser.add_argument("--max-model-len", "--max-tokens", type=int, default=4096, help="Max number of tokens for prompt + output")
-    parser.add_argument("--min-output-len", type=int, default=500, help="Minimum number of tokens for output")
+    parser.add_argument("--max-model-len", type=int, default=4096, help="Max number of tokens for prompt + output")
+    parser.add_argument("--max-output-len", "--max-tokens", type=int, default=512, help="Max number of tokens for output")
     parser.add_argument("--max-num-seqs", "--batch-size", type=int, default=16, help="Max number of prompts vLLM processes in parallel (higher = more throughput but more memory)")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.95, help="Fraction of GPU memory to use")
     parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
@@ -78,17 +78,17 @@ if __name__ == "__main__":
         with open(metadata_path, "w") as f:
             json.dump(current_metadata, f, indent=2)
 
-    # Ignore prompts that's too long (exceeds max-model-len minus min-output-len)
+    # Ignore prompts that's too long (exceeds max-model-len minus max-output-len)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
     system_instr_token_length = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
     token_lengths, bs = [], int(1e5)
     for i in range(0, len(df), bs):
         token_lengths += tokenizer(df[args.text_col].iloc[i:i+bs].tolist(), add_special_tokens=False, return_length=True)["length"]
     df["token_length"] = token_lengths
-    mask = system_instr_token_length + df["token_length"] > args.max_model_len - args.min_output_len
+    mask = system_instr_token_length + df["token_length"] > args.max_model_len - args.max_output_len
     if mask.any():
         df, df_ignored = df[~mask], df[mask]
-        logger.info(f"Ignoring {mask.sum()} ({mask.mean()*100:.3f}%) samples that exceed {args.max_model_len-args.min_output_len} tokens")
+        logger.info(f"Ignoring {mask.sum()} ({mask.mean()*100:.3f}%) samples that exceed {args.max_model_len-args.max_output_len} tokens")
         df_ignored.to_parquet(f"{args.output_path}/unprocessed.parquet", index=False, compression="gzip")
     # Tokenizer uses a lot of memory, free it up
     del tokenizer
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     prompts = [f"{system_instr}\n{text}" for text in df[args.text_col]]
 
     # Create sampling parameter object
-    sampling_params = SamplingParams(temperature=args.temperature)
+    sampling_params = SamplingParams(temperature=args.temperature, max_tokens=args.max_output_len)
     if json_schema is not None:
         # Ensure sturctured JSON output
         structured_outputs_params_json = StructuredOutputsParams(json=json_schema)
