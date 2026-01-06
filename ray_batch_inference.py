@@ -18,7 +18,9 @@ import argparse
 import gc
 import json
 import logging
+import os
 
+import pandas as pd
 import ray
 from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
 from transformers import AutoTokenizer
@@ -48,29 +50,19 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.8, help=">1.0: More random/creative. 0.0: Greedy decoding. 1.0: standard randomness")
     parser.add_argument("--enable-thinking", action="store_true", help="Whether to enable thinking (may use up a lot of output tokens)")
     parser.add_argument("--concurrency", type=int, default=1, help="Number of parallel vLLM replicas for Ray Data (more replicas = more GPUs utilized)")
+    parser.add_argument("--checkpoint-interval", type=int, default=100, help="Save checkpoint every N batches")
+    parser.add_argument("--resume-from-checkpoint", action="store_true", help="Resume from existing output directory if it exists")
     args = parser.parse_args()
 
+    os.makedirs(f"{args.output_path}/generated_output", exist_ok=True)
     model_path = f"{ROOT_DIR}/LLMs/{args.model_name}"
     if args.tokenizer_path is None:
         args.tokenizer_path = model_path
 
     # Load dataset and system instruction
-    ds = ray.data.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
+    df = pd.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
     with open(args.prompt_path, "r", encoding="utf-8") as file:
         system_instr = file.read()
-
-    # Ignore prompts that's too long (exceeds max-model-len minus max-output-len)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
-    sys_token_len = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
-    max_input_tokens = args.max_model_len - args.max_output_len
-    original_count = ds.count()
-    ds = ds.filter(lambda row: sys_token_len + tokenizer(row[args.text_col], add_special_tokens=False, return_length=True)["length"] <= max_input_tokens)
-    filtered_count = ds.count()
-    if original_count > filtered_count:
-        logger.info(f"Ignoring {original_count - filtered_count} ({(original_count - filtered_count)/original_count*100:.3f}%) samples exceeding {max_input_tokens} tokens")
-    # Tokenizer uses a lot of memory, free it up
-    del tokenizer
-    gc.collect()
 
     # Load structured output schema if provided
     json_schema = None
@@ -79,10 +71,37 @@ if __name__ == "__main__":
             json_schema = json.load(f)
         logger.info("Structured JSON output enabled")
 
-    # Save metadata
+    # Validate metadata on resume
     metadata_path = f"{args.output_path}/metadata.json"
-    with open(metadata_path, "w") as f:
-        json.dump(vars(args), f, indent=2)
+    current_metadata = vars(args)
+    if args.resume_from_checkpoint:
+        with open(metadata_path, "r") as f:
+            saved_metadata = json.load(f)
+        # Compare saved metadata with current args
+        assert saved_metadata == current_metadata, (
+            f"Cannot resume: metadata mismatch detected.\n"
+            f"Saved: {saved_metadata}\n"
+            f"Current: {current_metadata}"
+        )
+    else:
+        with open(metadata_path, "w") as f:
+            json.dump(current_metadata, f, indent=2)
+
+    # Ignore prompts that's too long (exceeds max-model-len minus max-output-len)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    system_instr_token_length = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
+    token_lengths, bs = [], int(1e5)
+    for i in range(0, len(df), bs):
+        token_lengths += tokenizer(df[args.text_col].iloc[i:i+bs].tolist(), add_special_tokens=False, return_length=True)["length"]
+    df["token_length"] = token_lengths
+    mask = system_instr_token_length + df["token_length"] > args.max_model_len - args.max_output_len
+    if mask.any():
+        df, df_ignored = df[~mask], df[mask]
+        logger.info(f"Ignoring {mask.sum()} ({mask.mean()*100:.3f}%) samples that exceed {args.max_model_len-args.max_output_len} tokens")
+        df_ignored.to_parquet(f"{args.output_path}/unprocessed.parquet", index=False, compression="gzip")
+    # Tokenizer uses a lot of memory, free it up
+    del tokenizer
+    gc.collect()
 
     # Configure vLLM engine for Ray Data
     config = vLLMEngineProcessorConfig(
@@ -133,15 +152,20 @@ if __name__ == "__main__":
         postprocess=postprocess_row,
     )
 
-    # Execute inference using Ray Data
+    # Execute inference using Ray Data in batches
     logger.info("Starting batch inference")
-    result_ds = vllm_processor(ds)
+    batch_size = args.max_num_seqs * args.checkpoint_interval
+    for batch_num, i in enumerate(range(0, len(df), batch_size)):
+        # Check if already processed
+        batch_filepath = f"{args.output_path}/generated_output/batch_{batch_num}.parquet"
+        if args.resume_from_checkpoint and os.path.exists(batch_filepath):
+            continue
 
-    # Write results to parquet
-    logger.info(f"Writing results to {args.output_path}")
-    result_ds.write_parquet(
-        args.output_path,
-        compression="zstd",
-    )
+        # Process them
+        subset = df.iloc[i:i+batch_size]
+        res = vllm_processor(ray.data.from_pandas(subset))
+
+        # Save results
+        res.write_parquet(batch_filepath, compression="zstd")
 
     logger.info("Batch inference completed successfully")

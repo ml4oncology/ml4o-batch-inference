@@ -5,7 +5,8 @@
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:l40:2
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
+#SBATCH --nodelist=node159
 #SBATCH --mem=32G
 #SBATCH --output=/cluster/home/%u/logs/%j.out
 #SBATCH --error=/cluster/home/%u/logs/%j.err
