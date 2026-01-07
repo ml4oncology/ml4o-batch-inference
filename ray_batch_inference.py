@@ -24,6 +24,7 @@ import pandas as pd
 import ray
 from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
 from transformers import AutoTokenizer
+from vllm.sampling_params import StructuredOutputsParams
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -37,9 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("--data-path", type=str, required=True, help="Path to the parquet dataset")
     parser.add_argument("--prompt-path", type=str, required=True, help="Path to the text file containing the system prompt")
     parser.add_argument("--output-path", type=str, required=True, help="Directory to save the results")
-    parser.add_argument("--tokenizer-path", type=str, default=None, help="Path to the tokenizer")
     parser.add_argument("--json-struct-path", type=str, default=None, help="Path to the JSON file describing the desired structured output")
-    parser.add_argument("--model-name", type=str, default="Qwen3-14B")
+    parser.add_argument("--model-name", type=str, default="Qwen3-14B", help="Must be a HuggingFace-style model directory. GGUF not supported yet.")
     parser.add_argument("--text-col", type=str, default="note", help="Name of the column in the dataset containing the text")
     parser.add_argument("--id-col", type=str, default="note_id", help="Name of the column in the dataset containing the text identifier")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs used to split up the model weights for tensor parallelism. May not improve performance if model can fit in a single GPU with room to spare")
@@ -56,8 +56,6 @@ if __name__ == "__main__":
 
     os.makedirs(f"{args.output_path}/generated_output", exist_ok=True)
     model_path = f"{ROOT_DIR}/LLMs/{args.model_name}"
-    if args.tokenizer_path is None:
-        args.tokenizer_path = model_path
 
     # Load dataset and system instruction
     df = pd.read_parquet(args.data_path, columns=[args.id_col, args.text_col])
@@ -88,7 +86,7 @@ if __name__ == "__main__":
             json.dump(current_metadata, f, indent=2)
 
     # Ignore prompts that's too long (exceeds max-model-len minus max-output-len)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     system_instr_token_length = tokenizer(system_instr, add_special_tokens=False, return_length=True)["length"]
     token_lengths, bs = [], int(1e5)
     for i in range(0, len(df), bs):
@@ -107,7 +105,6 @@ if __name__ == "__main__":
     config = vLLMEngineProcessorConfig(
         model_source=model_path,
         engine_kwargs={
-            "tokenizer": args.tokenizer_path,
             "tensor_parallel_size": args.tensor_parallel_size,
             "max_model_len": args.max_model_len,
             "gpu_memory_utilization": args.gpu_memory_utilization,
@@ -116,7 +113,6 @@ if __name__ == "__main__":
         },
         concurrency=args.concurrency,  # Number of parallel vLLM replicas
         batch_size=args.max_num_seqs,  # Prompts per batch
-        chat_template_kwargs={"enable_thinking": args.enable_thinking},
     )
 
     # Define preprocessing function
@@ -128,7 +124,7 @@ if __name__ == "__main__":
         ]
         sampling_params = {"temperature": args.temperature, "max_tokens": args.max_output_len}
         if json_schema is not None:
-            sampling_params["guided_json"] = json_schema
+            sampling_params["structured_outputs"] = StructuredOutputsParams(json=json_schema)
         return {
             "messages": messages,
             "sampling_params": sampling_params,
@@ -150,6 +146,7 @@ if __name__ == "__main__":
         config,
         preprocess=preprocess_row,
         postprocess=postprocess_row,
+        builder_kwargs={"chat_template_kwargs": {"enable_thinking": args.enable_thinking}},
     )
 
     # Execute inference using Ray Data in batches
