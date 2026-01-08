@@ -44,11 +44,11 @@ echo "================================================"
 # NOTE: because we are not using --containall, apptainer automatically binds $HOME, /tmp, /dev, /proc, /sys, and ./
 export APPTAINER_BINDPATH=$APPTAINER_BINDPATH,$MODEL_PATH
 
-# Run batch inference script inside the container
-apptainer exec --nv $IMAGE_PATH python3.10 batch_inference.py \
+# Run batch inference inside the container
+apptainer exec --nv $IMAGE_PATH ml4o-batch-inf vllm \
     --data-path example-data.parquet \
-    --output-path example-output.parquet \
-    --prompt-path example-prompt.txt \
+    --output-path example-output \
+    --prompt-path example-prompt.txt
 
 # Print completion information                                     
 echo "================================================"            

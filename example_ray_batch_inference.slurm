@@ -45,9 +45,9 @@ echo "================================================"
 export APPTAINER_BINDPATH=$APPTAINER_BINDPATH,$MODEL_PATH
 
 # Run Ray-based batch inference with 2 GPU replicas (no tensor parallelism)
-apptainer exec --nv $IMAGE_PATH python3.10 ray_batch_inference.py \
+apptainer exec --nv $IMAGE_PATH ml4o-batch-inf ray \
     --data-path example-data.parquet \
-    --output-path example-output.parquet \
+    --output-path example-output \
     --prompt-path example-prompt.txt \
     --tensor-parallel-size 1 \
     --concurrency 2
