@@ -44,6 +44,9 @@ inference = [
     "ray>=2.53.0",
 ]
 
+[project.scripts]
+ml4o-batch-inf = "ml4o_batch_inf.batch_inference:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
