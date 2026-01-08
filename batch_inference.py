@@ -69,6 +69,7 @@ if __name__ == "__main__":
     if args.resume_from_checkpoint:
         with open(metadata_path, "r") as f:
             saved_metadata = json.load(f)
+            saved_metadata["resume_from_checkpoint"] = True
         # Compare saved metadata with current args
         assert saved_metadata == current_metadata, (
             f"Cannot resume: metadata mismatch detected.\n"
@@ -140,6 +141,7 @@ if __name__ == "__main__":
         # Check if already processed
         batch_filepath = f"{args.output_path}/generated_output/batch_{batch_num}.parquet"
         if args.resume_from_checkpoint and os.path.exists(batch_filepath):
+            logger.info(f"Skipping batch {batch_num}")
             continue
 
         # Process them
