@@ -45,7 +45,7 @@ inference = [
 ]
 
 [project.scripts]
-ml4o-batch-inf = "ml4o_batch_inf.batch_inference:main"
+ml4o-batch-inf = "ml4o_batch_inf.cli:main"
 
 [build-system]
 requires = ["hatchling"]
