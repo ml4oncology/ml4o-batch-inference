@@ -8,6 +8,8 @@ This project provides an efficient solution for running batch inference workload
 
 **Key Features:**
 - Optimized for batch processing with vLLM
+- Single-node and distributed (Ray) inference modes
+- CLI with `ml4o-batch-inf` command
 - Apptainer/Singularity container support for HPC environments
 
 ## Installation
@@ -43,27 +45,72 @@ apptainer build ml4o-batch-inf-image.sif docker-daemon://ml4o-batch-inf-image
 ```
 ## Usage
 
-### Basic Batch Inference
-
-Run batch inference using the Apptainer container:
+### CLI Commands
 
 ```bash
-apptainer exec --nv ml4o-batch-inf-image.sif python3.10 batch_inference.py \
-    --data-path /path/to/data.parquet \
-    --output-path /path/to/output.parquet \
-    --prompt-path /path/to/prompt.txt \
+# Show help
+ml4o-batch-inf --help
+ml4o-batch-inf vllm --help
+ml4o-batch-inf ray --help
 ```
+
+### Single-Node Inference (vLLM)
+
+Run batch inference on a single node:
+
+```bash
+apptainer exec --nv ml4o-batch-inf-image.sif ml4o-batch-inf vllm \
+    --data-path /path/to/data.parquet \
+    --output-path /path/to/output \
+    --prompt-path /path/to/prompt.txt
+```
+
+### Distributed Inference (Ray + vLLM)
+
+Run distributed batch inference across multiple GPUs:
+
+```bash
+apptainer exec --nv ml4o-batch-inf-image.sif ml4o-batch-inf ray \
+    --data-path /path/to/data.parquet \
+    --output-path /path/to/output \
+    --prompt-path /path/to/prompt.txt \
+    --concurrency 2
+```
+
+### Common Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--data-path` | required | Path to the parquet dataset |
+| `--prompt-path` | required | Path to the system prompt file |
+| `--output-path` | required | Directory to save results |
+| `--model-name` | `Qwen3-14B` | Model name |
+| `--text-col` | `note` | Column containing text |
+| `--id-col` | `note_id` | Column containing text identifier |
+| `--max-model-len` | `4096` | Max tokens for prompt + output |
+| `--max-output-len` | `512` | Max tokens for output |
+| `--temperature` | `0.8` | Sampling temperature |
+| `--tensor-parallel-size` | `1` | GPUs for tensor parallelism |
+| `--enable-thinking` | `false` | Enable thinking mode |
+| `--resume-from-checkpoint` | `false` | Resume from existing output |
+
+**vLLM-only:** `--tokenizer-path`
+
+**Ray-only:** `--concurrency` (number of parallel vLLM replicas)
 
 ## Project Structure
 
 ```
 ml4o-batch-inference/
-├── Dockerfile              # Container definition
-├── pyproject.toml          # Project dependencies
-├── README.md               # This file
-├── batch_inference.py      # Main batch inference script
-├── ml4o_batch_inf/         # Core package
-└── examples/               # Example scripts and data
+├── Dockerfile                        # Container definition
+├── pyproject.toml                    # Project dependencies
+├── README.md                         # This file
+├── example_batch_inference.slurm     # Example Slurm script (single-node)
+├── example_ray_batch_inference.slurm # Example Slurm script (distributed)
+└── ml4o_batch_inf/                   # Core package
+    ├── cli.py                        # CLI entry point
+    ├── vllm_inference.py             # Single-node vLLM inference
+    └── ray_inference.py              # Distributed Ray + vLLM inference
 ```
 
 ## Development
