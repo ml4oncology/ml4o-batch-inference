@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "Assessment": {
+      "type": "string",
+      "enum": ["Yes", "No", "Uncertain"],
+      "description": "The assessment result"
+    },
+    "Reason": {
+      "type": "string",
+      "description": "Brief explanation citing specific findings"
+    }
+  },
+  "required": ["Assessment", "Reason"],
+  "additionalProperties": false
+}
